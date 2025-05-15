@@ -1,6 +1,45 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Head from "next/head";
 import cheerio from "cheerio";
+
+// Função para pegar preço FIPE no anúncio individual
+async function pegarPrecoFipeDoAnuncio(url) {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/113.0.0.0 Safari/537.36",
+      },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    // Seleciona o preço FIPE — confirme o seletor pois pode mudar
+    const precoFipeTexto = $('[data-testid="price-fipe-value"]').text() || "";
+    const precoFipe = parseInt(precoFipeTexto.replace(/[^\d]/g, ""), 10);
+
+    return precoFipe || null;
+  } catch {
+    return null;
+  }
+}
+
+async function linkValido(url) {
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Convert string preço "R$ 45.000" para número 45000
+function parsePreco(precoStr) {
+  if (!precoStr) return null;
+  const precoNum = parseInt(precoStr.replace(/[^\d]/g, ""), 10);
+  return isNaN(precoNum) ? null : precoNum;
+}
 
 export async function getServerSideProps() {
   try {
@@ -21,45 +60,42 @@ export async function getServerSideProps() {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    const carros = [];
+    const rawCarros = [];
 
     $("li.sc-1fcmfeb-2").each((_, el) => {
       const titulo = $(el).find("h2").text().trim();
-      const precoTexto = $(el).find("p.sc-ifAKCX.eoKYee").text().trim();
+      const preco = $(el).find("p.sc-ifAKCX.eoKYee").text().trim();
       const link = $(el).find("a").attr("href");
       const imagem =
         $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
 
-      // Exemplo de seletor para preço FIPE — ajustar se precisar
-      // Geralmente a OLX mostra preço FIPE em um span ou div com algum texto "Preço FIPE"
-      // Vou tentar pegar um texto que contenha "FIPE" e extrair o valor numérico
-      let precoFipeTexto = "";
-
-      // Procura qualquer texto dentro do anúncio que contenha "FIPE"
-      $(el)
-        .find("*")
-        .each((_, elem) => {
-          const text = $(elem).text();
-          if (text.toLowerCase().includes("fipe")) {
-            precoFipeTexto = text.replace(/[^\d]/g, "");
-            return false; // para o each
-          }
-        });
-
-      const preco = parseInt(precoTexto.replace(/[^\d]/g, ""), 10);
-      const precoFipe = precoFipeTexto ? parseInt(precoFipeTexto, 10) : null;
-
-      if (titulo && preco && link && imagem && precoFipe) {
-        carros.push({
+      if (titulo && preco && link && imagem) {
+        const linkOLX = link.startsWith("http")
+          ? link
+          : "https://www.olx.com.br" + link;
+        rawCarros.push({
           titulo,
           preco,
-          precoFipe,
-          linkOLX: link.startsWith("http") ? link : "https://www.olx.com.br" + link,
+          linkOLX,
           foto: imagem,
           localizacao: "PR",
+          precoNum: parsePreco(preco),
         });
       }
     });
+
+    // Valida links e pega preco FIPE de cada anúncio
+    const carrosComFipe = await Promise.all(
+      rawCarros.map(async (carro) => {
+        const valido = await linkValido(carro.linkOLX);
+        if (!valido) return null;
+        const precoFipe = await pegarPrecoFipeDoAnuncio(carro.linkOLX);
+        if (!precoFipe) return null;
+        return { ...carro, precoFipe };
+      })
+    );
+
+    const carros = carrosComFipe.filter(Boolean);
 
     return {
       props: { carros },
@@ -75,13 +111,12 @@ export async function getServerSideProps() {
 export default function Home({ carros }) {
   const [margem, setMargem] = useState(4000);
 
-  const margensDisponiveis = [];
-  for (let i = 2000; i <= 30000; i += 1000) {
-    margensDisponiveis.push(i);
-  }
-
+  // Filtra carros com margem mínima abaixo da FIPE
   const carrosFiltrados = carros.filter(
-    (carro) => carro.precoFipe - carro.preco >= margem
+    (carro) =>
+      carro.precoNum !== null &&
+      carro.precoFipe !== null &&
+      carro.precoFipe - carro.precoNum >= margem
   );
 
   return (
@@ -92,16 +127,15 @@ export default function Home({ carros }) {
       <main style={{ maxWidth: 800, margin: "auto", padding: 20 }}>
         <h1>Carros à venda no Paraná (OLX)</h1>
 
-        <label htmlFor="margem">
+        <label>
           Margem mínima abaixo da FIPE:{" "}
           <select
-            id="margem"
             value={margem}
-            onChange={(e) => setMargem(Number(e.target.value))}
+            onChange={(e) => setMargem(parseInt(e.target.value, 10))}
           >
-            {margensDisponiveis.map((val) => (
-              <option key={val} value={val}>
-                R$ {val.toLocaleString("pt-BR")}
+            {Array.from({ length: 29 }, (_, i) => (i + 2) * 1000).map((v) => (
+              <option key={v} value={v}>
+                R$ {v.toLocaleString("pt-BR")}
               </option>
             ))}
           </select>
@@ -147,15 +181,24 @@ export default function Home({ carros }) {
                 </a>
                 <p>
                   <strong>Preço anúncio:</strong>{" "}
-                  R$ {carro.preco.toLocaleString("pt-BR")}
+                  {carro.precoNum.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
                 </p>
                 <p>
                   <strong>Preço FIPE:</strong>{" "}
-                  R$ {carro.precoFipe.toLocaleString("pt-BR")}
+                  {carro.precoFipe.toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
                 </p>
                 <p>
                   <strong>Margem:</strong>{" "}
-                  R$ {(carro.precoFipe - carro.preco).toLocaleString("pt-BR")}
+                  {(carro.precoFipe - carro.precoNum).toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
                 </p>
                 <p>
                   <strong>Localização:</strong> {carro.localizacao}
