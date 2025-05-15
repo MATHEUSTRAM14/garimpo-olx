@@ -1,96 +1,82 @@
-import React, { useState } from "react";
+import React from "react";
+import Head from "next/head";
 
-export default function Home() {
-  const [fipe, setFipe] = useState("");
-  const [km, setKm] = useState("");
-
-  const carros = [
+// Código executado no servidor toda vez que a página for acessada
+export async function getServerSideProps() {
+  const response = await fetch(
+    "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios/estado-pr",
     {
-      id: 1,
-      titulo: "Ford Ka 2018",
-      preco: 45000,
-      km: 35000,
-      margem: 4000,
-      localizacao: "Curitiba - PR",
-      foto: "https://img.olx.com.br/images/96/963193611884188.jpg",
-      linkOLX: "https://www.olx.com.br/d/anuncio/ford-ka-2018-curitiba-ID12345678",
-    },
-    {
-      id: 2,
-      titulo: "Chevrolet Onix 2019",
-      preco: 55000,
-      km: 20000,
-      margem: 5000,
-      localizacao: "Londrina - PR",
-      foto: "https://img.olx.com.br/images/03/039107317560624.jpg",
-      linkOLX: "https://www.olx.com.br/d/anuncio/onix-2019-londrina-ID87654321",
-    },
-    {
-      id: 3,
-      titulo: "Hyundai HB20 2017",
-      preco: 48000,
-      km: 42000,
-      margem: 3000,
-      localizacao: "Maringá - PR",
-      foto: "https://img.olx.com.br/images/04/041054701860331.jpg",
-      linkOLX: "https://www.olx.com.br/d/anuncio/hb20-2017-maringa-ID99887766",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/113.0.0.0 Safari/537.36",
+      },
     }
-  ];
-
-  const carrosFiltrados = carros.filter(
-    (carro) =>
-      carro.localizacao.includes("PR") &&
-      (fipe === "" || carro.preco <= Number(fipe)) &&
-      (km === "" || carro.km <= Number(km))
   );
 
-  return (
-    <div style={{ maxWidth: 700, margin: "auto", padding: 20 }}>
-      <h1>Garimpo OLX</h1>
-      <input
-        placeholder="Preço FIPE"
-        value={fipe}
-        onChange={(e) => setFipe(e.target.value)}
-        style={{ marginRight: 10 }}
-        type="number"
-      />
-      <input
-        placeholder="Quilometragem Máx."
-        value={km}
-        onChange={(e) => setKm(e.target.value)}
-        type="number"
-      />
+  const html = await response.text();
+  const carros = [];
 
-      <div style={{ marginTop: 20 }}>
-        {carrosFiltrados.map((carro) => (
+  const cheerio = require("cheerio");
+  const $ = cheerio.load(html);
+
+  $("li.sc-1fcmfeb-2").each((_, el) => {
+    const titulo = $(el).find("h2").text().trim();
+    const preco = $(el).find("p.sc-ifAKCX.eoKYee").text().trim();
+    const link = $(el).find("a").attr("href");
+    const imagem = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
+
+    if (titulo && preco && link && imagem) {
+      carros.push({
+        titulo,
+        preco,
+        linkOLX: "https://www.olx.com.br" + link,
+        foto: imagem,
+        localizacao: "PR",
+      });
+    }
+  });
+
+  return {
+    props: { carros },
+  };
+}
+
+// Componente principal
+export default function Home({ carros }) {
+  return (
+    <div style={{ maxWidth: 800, margin: "auto", padding: 20 }}>
+      <Head>
+        <title>Garimpo OLX</title>
+      </Head>
+      <h1>Carros no Paraná (OLX)</h1>
+
+      {carros.length === 0 ? (
+        <p>Nenhum carro encontrado no momento.</p>
+      ) : (
+        carros.map((carro, index) => (
           <div
-            key={carro.id}
+            key={index}
             style={{
-              border: "1px solid #ccc",
-              borderRadius: 8,
-              padding: 20,
               marginBottom: 20,
+              borderBottom: "1px solid #ccc",
+              paddingBottom: 20,
             }}
           >
-            <img
-              src={carro.foto}
-              alt={carro.titulo}
-              style={{ width: 150, height: "auto", float: "left", marginRight: 20 }}
-            />
-            <div>
-              <a href={carro.linkOLX} target="_blank" rel="noopener noreferrer">
-                <h2>{carro.titulo}</h2>
-              </a>
-              <p>Localização: {carro.localizacao}</p>
-              <p>Preço FIPE: R$ {carro.preco.toLocaleString()}</p>
-              <p>Quilometragem: {carro.km.toLocaleString()} km</p>
-              <p>Margem de Revenda: R$ {carro.margem.toLocaleString()}</p>
-            </div>
+            <a href={carro.linkOLX} target="_blank" rel="noreferrer">
+              <img
+                src={carro.foto}
+                width={200}
+                style={{ float: "left", marginRight: 20 }}
+                alt={carro.titulo}
+              />
+              <h2>{carro.titulo}</h2>
+              <p>{carro.preco}</p>
+              <p>{carro.localizacao}</p>
+            </a>
             <div style={{ clear: "both" }}></div>
           </div>
-        ))}
-      </div>
+        ))
+      )}
     </div>
   );
 }
-
