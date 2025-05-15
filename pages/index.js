@@ -1,80 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import Head from "next/head";
 import cheerio from "cheerio";
-
-// Parse preco em número
-function parsePreco(precoStr) {
-  return parseInt(precoStr.replace(/[^\d]/g, "")) || 0;
-}
-
-// Função simples para extrair marca, modelo e ano do título (exemplo básico)
-function extrairDadosTitulo(titulo) {
-  // EXEMPLO SIMPLIFICADO, você pode melhorar depois
-  // Exemplo: "Ford Ka 2015" -> { marca: "ford", modelo: "ka", ano: "2015" }
-  const regex = /(\d{4})/; // pega o ano
-  const ano = titulo.match(regex)?.[0] || "";
-  const palavras = titulo.toLowerCase().split(" ");
-  // Marca: primeira palavra
-  const marca = palavras[0] || "";
-  // Modelo: segunda palavra (se existir)
-  const modelo = palavras[1] || "";
-
-  return { marca, modelo, ano };
-}
-
-// Consulta API FIPE para preço do carro
-async function consultarPrecoFipe(marca, modelo, ano) {
-  try {
-    // Buscar código da marca
-    let res = await fetch("https://parallelum.com.br/fipe/api/v1/carros/marcas");
-    const marcas = await res.json();
-    const marcaObj = marcas.find((m) => m.nome.toLowerCase() === marca.toLowerCase());
-    if (!marcaObj) return null;
-
-    // Buscar modelos da marca
-    res = await fetch(
-      `https://parallelum.com.br/fipe/api/v1/carros/marcas/${marcaObj.codigo}/modelos`
-    );
-    const modelosData = await res.json();
-    const modeloObj = modelosData.modelos.find(
-      (m) => m.nome.toLowerCase() === modelo.toLowerCase()
-    );
-    if (!modeloObj) return null;
-
-    // Buscar anos do modelo
-    res = await fetch(
-      `https://parallelum.com.br/fipe/api/v1/carros/marcas/${marcaObj.codigo}/modelos/${modeloObj.codigo}/anos`
-    );
-    const anos = await res.json();
-    // O código do ano pode ser ex: "2015-1"
-    // Vamos buscar o que contenha o ano exato
-    const anoObj = anos.find((a) => a.nome.includes(ano));
-    if (!anoObj) return null;
-
-    // Buscar preço do veículo
-    res = await fetch(
-      `https://parallelum.com.br/fipe/api/v1/carros/marcas/${marcaObj.codigo}/modelos/${modeloObj.codigo}/anos/${anoObj.codigo}`
-    );
-    const dados = await res.json();
-
-    // Valor vem com R$ e vírgula, exemplo: "R$ 45.000,00"
-    const valorNum = parsePreco(dados.Valor);
-
-    return valorNum;
-  } catch {
-    return null;
-  }
-}
-
-// Verifica se o link está no ar (HEAD)
-async function linkValido(url) {
-  try {
-    const res = await fetch(url, { method: "HEAD" });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
 
 export async function getServerSideProps() {
   try {
@@ -88,38 +14,52 @@ export async function getServerSideProps() {
       }
     );
 
-    if (!response.ok) throw new Error(`Erro na requisição: ${response.status}`);
+    if (!response.ok) {
+      throw new Error(`Erro na requisição: ${response.status}`);
+    }
 
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    const rawCarros = [];
+    const carros = [];
 
     $("li.sc-1fcmfeb-2").each((_, el) => {
       const titulo = $(el).find("h2").text().trim();
-      const preco = $(el).find("p.sc-ifAKCX.eoKYee").text().trim();
+      const precoTexto = $(el).find("p.sc-ifAKCX.eoKYee").text().trim();
       const link = $(el).find("a").attr("href");
-      const imagem = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
+      const imagem =
+        $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
 
-      if (titulo && preco && link && imagem) {
-        const linkOLX = link.startsWith("http") ? link : "https://www.olx.com.br" + link;
-        rawCarros.push({
+      // Exemplo de seletor para preço FIPE — ajustar se precisar
+      // Geralmente a OLX mostra preço FIPE em um span ou div com algum texto "Preço FIPE"
+      // Vou tentar pegar um texto que contenha "FIPE" e extrair o valor numérico
+      let precoFipeTexto = "";
+
+      // Procura qualquer texto dentro do anúncio que contenha "FIPE"
+      $(el)
+        .find("*")
+        .each((_, elem) => {
+          const text = $(elem).text();
+          if (text.toLowerCase().includes("fipe")) {
+            precoFipeTexto = text.replace(/[^\d]/g, "");
+            return false; // para o each
+          }
+        });
+
+      const preco = parseInt(precoTexto.replace(/[^\d]/g, ""), 10);
+      const precoFipe = precoFipeTexto ? parseInt(precoFipeTexto, 10) : null;
+
+      if (titulo && preco && link && imagem && precoFipe) {
+        carros.push({
           titulo,
           preco,
-          precoNum: parsePreco(preco),
-          linkOLX,
+          precoFipe,
+          linkOLX: link.startsWith("http") ? link : "https://www.olx.com.br" + link,
           foto: imagem,
           localizacao: "PR",
         });
       }
     });
-
-    // Valida links com status 200
-    const carrosValidados = await Promise.all(
-      rawCarros.map(async (carro) => (await linkValido(carro.linkOLX)) ? carro : null)
-    );
-
-    const carros = carrosValidados.filter(Boolean);
 
     return {
       props: { carros },
@@ -134,35 +74,15 @@ export async function getServerSideProps() {
 
 export default function Home({ carros }) {
   const [margem, setMargem] = useState(4000);
-  const [carrosFiltrados, setCarrosFiltrados] = useState([]);
-  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    async function filtrarComFipe() {
-      setLoading(true);
-      const listaFiltrada = [];
+  const margensDisponiveis = [];
+  for (let i = 2000; i <= 30000; i += 1000) {
+    margensDisponiveis.push(i);
+  }
 
-      for (const carro of carros) {
-        const { marca, modelo, ano } = extrairDadosTitulo(carro.titulo);
-
-        if (!marca || !modelo || !ano) continue;
-
-        const precoFipe = await consultarPrecoFipe(marca, modelo, ano);
-        if (!precoFipe) continue;
-
-        const margemFipe = precoFipe - carro.precoNum;
-
-        if (margemFipe >= margem) {
-          listaFiltrada.push({ ...carro, precoFipe, margemFipe });
-        }
-      }
-
-      setCarrosFiltrados(listaFiltrada);
-      setLoading(false);
-    }
-
-    filtrarComFipe();
-  }, [margem, carros]);
+  const carrosFiltrados = carros.filter(
+    (carro) => carro.precoFipe - carro.preco >= margem
+  );
 
   return (
     <>
@@ -172,31 +92,24 @@ export default function Home({ carros }) {
       <main style={{ maxWidth: 800, margin: "auto", padding: 20 }}>
         <h1>Carros à venda no Paraná (OLX)</h1>
 
-        <label>
-          Margem mínima abaixo da FIPE:
+        <label htmlFor="margem">
+          Margem mínima abaixo da FIPE:{" "}
           <select
+            id="margem"
             value={margem}
             onChange={(e) => setMargem(Number(e.target.value))}
-            style={{ marginLeft: 10, marginBottom: 20 }}
           >
-            {[...Array(29)].map((_, i) => {
-              const val = (i + 2) * 1000;
-              return (
-                <option key={val} value={val}>
-                  R$ {val.toLocaleString()}
-                </option>
-              );
-            })}
+            {margensDisponiveis.map((val) => (
+              <option key={val} value={val}>
+                R$ {val.toLocaleString("pt-BR")}
+              </option>
+            ))}
           </select>
         </label>
 
-        {loading && <p>Carregando dados FIPE e filtrando...</p>}
-
-        {!loading && carrosFiltrados.length === 0 && (
+        {carrosFiltrados.length === 0 ? (
           <p>Nenhum carro encontrado com essa margem.</p>
-        )}
-
-        {!loading &&
+        ) : (
           carrosFiltrados.map((carro, index) => (
             <div
               key={index}
@@ -209,7 +122,12 @@ export default function Home({ carros }) {
                 gap: 20,
               }}
             >
-              <a href={carro.linkOLX} target="_blank" rel="noreferrer">
+              <a
+                href={carro.linkOLX}
+                target="_blank"
+                rel="noreferrer"
+                style={{ flexShrink: 0 }}
+              >
                 <img
                   src={carro.foto}
                   alt={carro.titulo}
@@ -228,17 +146,24 @@ export default function Home({ carros }) {
                   <h2>{carro.titulo}</h2>
                 </a>
                 <p>
-                  <strong>Preço:</strong> R$ {carro.precoNum.toLocaleString()}
+                  <strong>Preço anúncio:</strong>{" "}
+                  R$ {carro.preco.toLocaleString("pt-BR")}
                 </p>
                 <p>
-                  <strong>Preço FIPE:</strong> R$ {carro.precoFipe.toLocaleString()}
+                  <strong>Preço FIPE:</strong>{" "}
+                  R$ {carro.precoFipe.toLocaleString("pt-BR")}
                 </p>
                 <p>
-                  <strong>Margem:</strong> R$ {carro.margemFipe.toLocaleString()}
+                  <strong>Margem:</strong>{" "}
+                  R$ {(carro.precoFipe - carro.preco).toLocaleString("pt-BR")}
+                </p>
+                <p>
+                  <strong>Localização:</strong> {carro.localizacao}
                 </p>
               </div>
             </div>
-          ))}
+          ))
+        )}
       </main>
     </>
   );
