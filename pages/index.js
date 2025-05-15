@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import Head from "next/head";
 import cheerio from "cheerio";
 
-// Função para pegar preço FIPE no anúncio individual
+// Função para pegar o preço FIPE a partir da página do anúncio OLX
 async function pegarPrecoFipeDoAnuncio(url) {
   try {
     const res = await fetch(url, {
@@ -11,13 +11,53 @@ async function pegarPrecoFipeDoAnuncio(url) {
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/113.0.0.0 Safari/537.36",
       },
     });
+
     if (!res.ok) return null;
+
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Seleciona o preço FIPE — confirme o seletor pois pode mudar
-    const precoFipeTexto = $('[data-testid="price-fipe-value"]').text() || "";
-    const precoFipe = parseInt(precoFipeTexto.replace(/[^\d]/g, ""), 10);
+    // Pegar o JSON embutido na página
+    const jsonText = $('script[type="application/ld+json"]').html();
+
+    if (!jsonText) return null;
+
+    // Parse do JSON
+    const jsonData = JSON.parse(jsonText);
+
+    // A FIPE pode estar em "offers.priceSpecification" ou "priceSpecification" em outros locais
+    // Vamos procurar por priceSpecification com tipo PriceSpecification e atributo "name" contendo "FIPE"
+    let precoFipe = null;
+
+    // Tentar acessar o campo direto
+    if (jsonData.offers && jsonData.offers.priceSpecification) {
+      const ps = jsonData.offers.priceSpecification;
+      if (Array.isArray(ps)) {
+        for (const p of ps) {
+          if (
+            p.name &&
+            p.name.toLowerCase().includes("fipe") &&
+            p.price
+          ) {
+            precoFipe = parseInt(p.price, 10);
+            break;
+          }
+        }
+      } else {
+        if (
+          ps.name &&
+          ps.name.toLowerCase().includes("fipe") &&
+          ps.price
+        ) {
+          precoFipe = parseInt(ps.price, 10);
+        }
+      }
+    }
+
+    // Caso não tenha encontrado, tentar preço da FIPE em outras propriedades do JSON
+    if (!precoFipe && jsonData.fipePrice) {
+      precoFipe = parseInt(jsonData.fipePrice, 10);
+    }
 
     return precoFipe || null;
   } catch {
@@ -34,7 +74,6 @@ async function linkValido(url) {
   }
 }
 
-// Convert string preço "R$ 45.000" para número 45000
 function parsePreco(precoStr) {
   if (!precoStr) return null;
   const precoNum = parseInt(precoStr.replace(/[^\d]/g, ""), 10);
@@ -84,7 +123,7 @@ export async function getServerSideProps() {
       }
     });
 
-    // Valida links e pega preco FIPE de cada anúncio
+    // Validar links e pegar preço FIPE em paralelo
     const carrosComFipe = await Promise.all(
       rawCarros.map(async (carro) => {
         const valido = await linkValido(carro.linkOLX);
@@ -109,9 +148,8 @@ export async function getServerSideProps() {
 }
 
 export default function Home({ carros }) {
-  const [margem, setMargem] = useState(4000);
+  const [margem, setMargem] = React.useState(4000);
 
-  // Filtra carros com margem mínima abaixo da FIPE
   const carrosFiltrados = carros.filter(
     (carro) =>
       carro.precoNum !== null &&
