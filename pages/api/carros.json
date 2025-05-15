@@ -1,0 +1,20 @@
+[
+  {
+    "titulo": "Fiat Uno 2012",
+    "preco": 18000,
+    "fipe": 23000,
+    "ano": 2012,
+    "km": 140000,
+    "imagem": "https://via.placeholder.com/300",
+    "descricao": "\u00d3timo carro para o dia a dia, econ\u00f4mico e bem conservado."
+  },
+  {
+    "titulo": "Gol G6 2015",
+    "preco": 25000,
+    "fipe": 31000,
+    "ano": 2015,
+    "km": 90000,
+    "imagem": "https://via.placeholder.com/300",
+    "descricao": "Carro completo, segundo dono, revis\u00f5es em dia."
+  }
+]
