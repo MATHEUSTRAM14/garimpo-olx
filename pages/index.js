@@ -1,6 +1,17 @@
+
 import React from "react";
 import Head from "next/head";
 import cheerio from "cheerio";
+
+// Função para testar se o link ainda está no ar
+async function linkValido(url) {
+  try {
+    const response = await fetch(url, { method: "HEAD" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 export async function getServerSideProps() {
   try {
@@ -21,24 +32,38 @@ export async function getServerSideProps() {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    const carros = [];
+    const rawCarros = [];
 
     $("li.sc-1fcmfeb-2").each((_, el) => {
       const titulo = $(el).find("h2").text().trim();
       const preco = $(el).find("p.sc-ifAKCX.eoKYee").text().trim();
       const link = $(el).find("a").attr("href");
-      const imagem = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
+      const imagem =
+        $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
 
       if (titulo && preco && link && imagem) {
-        carros.push({
+        const linkOLX = link.startsWith("http")
+          ? link
+          : "https://www.olx.com.br" + link;
+        rawCarros.push({
           titulo,
           preco,
-          linkOLX: link.startsWith("http") ? link : "https://www.olx.com.br" + link,
+          linkOLX,
           foto: imagem,
           localizacao: "PR",
         });
       }
     });
+
+    // Valida links com status 200
+    const carrosValidados = await Promise.all(
+      rawCarros.map(async (carro) => {
+        const valido = await linkValido(carro.linkOLX);
+        return valido ? carro : null;
+      })
+    );
+
+    const carros = carrosValidados.filter(Boolean);
 
     return {
       props: { carros },
@@ -97,8 +122,12 @@ export default function Home({ carros }) {
                 >
                   <h2>{carro.titulo}</h2>
                 </a>
-                <p><strong>Preço:</strong> {carro.preco}</p>
-                <p><strong>Localização:</strong> {carro.localizacao}</p>
+                <p>
+                  <strong>Preço:</strong> {carro.preco}
+                </p>
+                <p>
+                  <strong>Localização:</strong> {carro.localizacao}
+                </p>
               </div>
             </div>
           ))
